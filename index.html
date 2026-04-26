@@ -1,14 +1,397 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>我的第一個網頁</title>
+    <title>智慧點名系統 - 蘇琬筑</title>
+    
+    <!-- 使用 Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- MQTT.js 函式庫 -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    
+    <!-- Lucide 圖標庫 -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background: radial-gradient(circle at top right, #1e293b, #020617);
+            color: #f8fafc;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* 玻璃擬物風格 Glassmorphism */
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+            border-radius: 1rem;
+        }
+
+        /* 自定義滾動條 */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        /* 點點動畫 */
+        .status-dot {
+            box-shadow: 0 0 8px currentColor;
+        }
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(0.9); }
+        }
+        .animate-pulse-glow {
+            animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        
+        /* 進場動畫 */
+        .list-enter {
+            animation: slideIn 0.3s ease-out forwards;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
 </head>
-<body>
-    <h1>班級</h1>
-    <h2>學號</h2>
-    <h3>姓名</h3>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto space-y-6">
+        
+        <!-- 標題欄 -->
+        <header class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+            <div class="flex flex-col gap-2">
+                <div class="flex items-center gap-3">
+                    <div id="mqtt-status-dot" class="w-2.5 h-2.5 rounded-full bg-amber-500 status-dot animate-pulse-glow text-amber-500"></div>
+                    <span id="mqtt-status-text" class="text-xs font-mono font-bold tracking-widest text-amber-400 uppercase">MQTT 嘗試連線中...</span>
+                </div>
+                <h1 class="text-4xl md:text-5xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500">
+                    IoT 智慧點名系統
+                </h1>
+                <div class="flex items-center gap-2 mt-1">
+                    <span class="px-3 py-1 bg-white/10 rounded-full text-sm font-medium text-slate-300 border border-white/10">
+                        開發者：<span class="text-white font-bold">蘇琬筑</span>
+                    </span>
+                </div>
+            </div>
+            
+            <div class="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                <!-- 模擬刷卡功能：專為解決瀏覽器 WebSocket 限制設計 -->
+                <button onclick="simulateScan()" class="flex-1 lg:flex-none glass px-5 py-3 flex items-center justify-center gap-2 hover:bg-emerald-500/20 transition group text-emerald-400 border border-emerald-500/30">
+                    <i data-lucide="scan-line" class="w-5 h-5 group-hover:scale-110 transition"></i>
+                    <span class="font-bold">模擬感應</span>
+                </button>
+                
+                <button id="btn-tts" class="flex-1 lg:flex-none glass px-5 py-3 flex items-center justify-center gap-2 hover:bg-white/10 transition group text-blue-400">
+                    <i data-lucide="volume-2" class="w-5 h-5"></i>
+                    <span id="tts-label" class="font-bold">語音：開啟</span>
+                </button>
+                
+                <button onclick="exportCSV()" class="flex-1 lg:flex-none bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white px-6 py-3 rounded-2xl transition flex items-center justify-center gap-2 shadow-lg shadow-blue-900/30 font-bold border border-blue-400/30">
+                    <i data-lucide="download" class="w-5 h-5"></i>
+                    匯出 CSV
+                </button>
+            </div>
+        </header>
+
+        <!-- 數據儀表板 -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="glass p-5">
+                <p class="text-slate-400 text-sm font-medium mb-1">應到總人數</p>
+                <h2 id="stat-total" class="text-4xl font-black font-mono">0</h2>
+            </div>
+            
+            <div class="glass p-5 border-b-4 border-emerald-500/80">
+                <p class="text-emerald-400 text-sm font-medium mb-1">已出席人數</p>
+                <h2 id="stat-present" class="text-4xl font-black font-mono text-emerald-400">0</h2>
+            </div>
+            
+            <div class="glass p-5 border-b-4 border-rose-500/80">
+                <p class="text-rose-400 text-sm font-medium mb-1">缺席人數</p>
+                <h2 id="stat-absent" class="text-4xl font-black font-mono text-rose-400">0</h2>
+            </div>
+            
+            <div class="glass p-5 flex flex-col justify-between">
+                <div class="flex justify-between items-end">
+                    <p class="text-blue-300 text-sm font-medium mb-1">點名進度</p>
+                    <h2 id="stat-rate" class="text-3xl font-black font-mono text-blue-400">0%</h2>
+                </div>
+                <div class="w-full bg-slate-800/80 rounded-full h-2.5 mt-3 overflow-hidden border border-slate-700">
+                    <div id="stat-rate-bar" class="bg-gradient-to-r from-cyan-400 to-blue-500 h-2.5 rounded-full transition-all duration-1000" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 內容主區域 -->
+        <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            
+            <!-- 名單與搜尋 -->
+            <div class="xl:col-span-2 space-y-4">
+                <div class="relative glass">
+                    <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5"></i>
+                    <input type="text" id="search-input" placeholder="搜尋姓名、學號或 RFID..." 
+                           class="w-full bg-transparent border-none py-4 pl-12 pr-4 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 rounded-2xl">
+                </div>
+
+                <div class="glass overflow-hidden h-[550px] flex flex-col">
+                    <div class="overflow-x-auto flex-1">
+                        <table class="w-full text-left">
+                            <thead class="bg-slate-800/80 text-slate-400 text-xs font-bold uppercase sticky top-0 z-10">
+                                <tr>
+                                    <th class="px-6 py-4">狀態</th>
+                                    <th class="px-6 py-4">姓名</th>
+                                    <th class="px-6 py-4">學號</th>
+                                    <th class="px-6 py-4">打卡時間</th>
+                                    <th class="px-6 py-4 text-right">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="student-tbody" class="divide-y divide-white/5 text-sm">
+                                <!-- 由 JS 動態填充 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 活動紀錄 -->
+            <div class="glass h-[626px] flex flex-col">
+                <div class="p-4 border-b border-white/10 flex items-center justify-between bg-white/5">
+                    <h3 class="font-bold flex items-center gap-2 text-slate-200">
+                        <i data-lucide="activity" class="text-blue-400 w-5 h-5"></i> 系統活動紀錄
+                    </h3>
+                </div>
+                <div id="log-container" class="p-4 flex-1 overflow-y-auto font-mono text-xs space-y-3">
+                    <!-- 日誌紀錄 -->
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // --- 設定與狀態 ---
+        const SHEET_ID = '1zX-O2p9HyNl1bfbjBuMZHqG-kQ33LZxa7NV0_-M0hTA';
+        const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv`;
+        const MQTT_CONFIG = { broker: 'wss://broker.emqx.io:8084/mqtt', topic: 'justRollCall' };
+
+        let students = [];
+        let ttsEnabled = true;
+        let audioCtx = null;
+
+        // --- 初始化 ---
+        window.onload = async () => {
+            lucide.createIcons();
+            addLog("系統初始化中...", "info");
+            await loadStudents();
+            initMQTT();
+            
+            document.getElementById('search-input').oninput = render;
+            document.getElementById('btn-tts').onclick = toggleTTS;
+        };
+
+        // --- 核心邏輯：名單載入 ---
+        async function loadStudents() {
+            try {
+                const res = await fetch(CSV_URL);
+                const text = await res.text();
+                const lines = text.split('\n').slice(1); // 跳過標題
+                students = lines.filter(l => l.trim()).map(l => {
+                    const [rfid, id, name] = l.split(',').map(s => s.trim());
+                    return { rfid, id, name, isPresent: false, time: null };
+                });
+                addLog(`載入名單成功：共 ${students.length} 位學生`, "success");
+                render();
+            } catch (e) {
+                addLog("名單載入失敗，使用離線模式", "error");
+            }
+        }
+
+        // --- 核心邏輯：MQTT ---
+        function initMQTT() {
+            try {
+                const client = mqtt.connect(MQTT_CONFIG.broker);
+                const dot = document.getElementById('mqtt-status-dot');
+                const txt = document.getElementById('mqtt-status-text');
+
+                client.on('connect', () => {
+                    dot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 status-dot animate-pulse-glow text-emerald-500";
+                    txt.innerText = "MQTT 已連線";
+                    txt.className = "text-xs font-mono font-bold tracking-widest text-emerald-400 uppercase";
+                    client.subscribe(MQTT_CONFIG.topic);
+                    addLog("MQTT 通訊已建立", "success");
+                });
+
+                client.on('message', (t, msg) => {
+                    checkIn(msg.toString().trim());
+                });
+
+                client.on('error', () => {
+                    txt.innerText = "連線受限 (請使用模擬)";
+                    txt.className = "text-xs font-mono font-bold tracking-widest text-rose-400 uppercase";
+                });
+            } catch (e) {
+                console.warn("MQTT 連線異常");
+            }
+        }
+
+        // --- 核心邏輯：點名 ---
+        function checkIn(tag) {
+            const idx = students.findIndex(s => s.rfid === tag);
+            if (idx === -1) {
+                addLog(`未知標籤：${tag}`, "error");
+                playAudio('error');
+                speak("感應到未知標籤");
+                return;
+            }
+
+            const s = students[idx];
+            if (s.isPresent) {
+                addLog(`${s.name} 重複感應`, "warn");
+                playAudio('warn');
+                speak(`${s.name} 重複點名`);
+                return;
+            }
+
+            s.isPresent = true;
+            s.time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+            addLog(`點名成功：${s.name}`, "success");
+            playAudio('success');
+            speak(`${s.name} 點名成功`);
+            render();
+        }
+
+        // --- 功能：模擬感應 ---
+        window.simulateScan = () => {
+            if (!students.length) return;
+            const rand = Math.random();
+            if (rand < 0.1) {
+                checkIn("INVALID_TAG_" + Math.floor(Math.random()*100));
+            } else {
+                const s = students[Math.floor(Math.random() * students.length)];
+                checkIn(s.rfid);
+            }
+        };
+
+        // --- 功能：手動操作 ---
+        window.manualToggle = (id) => {
+            const s = students.find(x => x.id === id);
+            if (!s) return;
+            s.isPresent = !s.isPresent;
+            s.time = s.isPresent ? new Date().toLocaleTimeString('zh-TW', { hour12: false }) : null;
+            addLog(`手動更新：${s.name} (${s.isPresent ? '出席' : '取消'})`, "warn");
+            render();
+        };
+
+        // --- 功能：匯出 CSV ---
+        window.exportCSV = () => {
+            const date = new Date().toISOString().slice(0,10);
+            let content = "\ufeff學號,姓名,RFID,狀態,時間\n";
+            students.forEach(s => {
+                content += `${s.id},${s.name},${s.rfid},${s.isPresent ? '出席' : '缺席'},${s.time || ''}\n`;
+            });
+            const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `點名表_${date}_蘇琬筑.csv`;
+            link.click();
+        };
+
+        // --- UI 渲染 ---
+        function render() {
+            const q = document.getElementById('search-input').value.toLowerCase();
+            const filtered = students.filter(s => s.name.includes(q) || s.id.includes(q));
+            const tbody = document.getElementById('student-tbody');
+            
+            tbody.innerHTML = filtered.map(s => `
+                <tr class="hover:bg-white/5 list-enter">
+                    <td class="px-6 py-4">
+                        <span class="px-2 py-1 rounded-full text-xs font-bold ${s.isPresent ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-500/10 text-slate-400'}">
+                            ${s.isPresent ? '已出席' : '缺席'}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 font-bold text-slate-100">${s.name}</td>
+                    <td class="px-6 py-4 text-slate-400 font-mono">${s.id}</td>
+                    <td class="px-6 py-4 font-mono ${s.time ? 'text-blue-300' : 'text-slate-600'}">${s.time || '--:--:--'}</td>
+                    <td class="px-6 py-4 text-right">
+                        <button onclick="manualToggle('${s.id}')" class="text-xs font-bold px-3 py-1 rounded bg-white/5 hover:bg-white/20 transition">
+                            ${s.isPresent ? '取消' : '補點'}
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+
+            const present = students.filter(s => s.isPresent).length;
+            const rate = students.length ? Math.round((present / students.length) * 100) : 0;
+            
+            document.getElementById('stat-total').innerText = students.length;
+            document.getElementById('stat-present').innerText = present;
+            document.getElementById('stat-absent').innerText = students.length - present;
+            document.getElementById('stat-rate').innerText = rate + "%";
+            document.getElementById('stat-rate-bar').style.width = rate + "%";
+            
+            lucide.createIcons();
+        }
+
+        // --- 小工具：日誌與語音 ---
+        function addLog(msg, type) {
+            const colors = { success: 'text-emerald-400', error: 'text-rose-400', warn: 'text-amber-400', info: 'text-blue-300' };
+            const container = document.getElementById('log-container');
+            const div = document.createElement('div');
+            div.className = `${colors[type]} bg-white/5 p-2 rounded list-enter`;
+            div.innerHTML = `<span class="opacity-40">[${new Date().toLocaleTimeString()}]</span> ${msg}`;
+            container.prepend(div);
+        }
+
+        function toggleTTS() {
+            ttsEnabled = !ttsEnabled;
+            document.getElementById('tts-label').innerText = ttsEnabled ? "語音：開啟" : "語音：關閉";
+            if(ttsEnabled) speak("語音功能已開啟");
+        }
+
+        function speak(txt) {
+            if (!ttsEnabled) return;
+            const u = new SpeechSynthesisUtterance(txt);
+            u.lang = 'zh-TW';
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(u);
+        }
+
+        function playAudio(type) {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            osc.connect(g); g.connect(audioCtx.destination);
+            
+            const now = audioCtx.currentTime;
+            if (type === 'success') { osc.frequency.setValueAtTime(880, now); g.gain.exponentialRampToValueAtTime(0.01, now + 0.3); }
+            else if (type === 'error') { osc.frequency.setValueAtTime(220, now); g.gain.exponentialRampToValueAtTime(0.01, now + 0.5); }
+            else { osc.frequency.setValueAtTime(440, now); g.gain.exponentialRampToValueAtTime(0.01, now + 0.2); }
+            
+            osc.start(); osc.stop(now + 0.5);
+        }
+    </script>
 </body>
 </html>
